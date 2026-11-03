@@ -3,8 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="description" content="Trainer kelistrikan otomotif dengan simulator relay SPDT 5 pin." />
-    <title>Simulator Rangkaian Dasar · Relay 5 Pin</title>
+    <meta name="description" content="Trainer kelistrikan sepeda motor untuk sistem starter, penerangan, tanda belok, dan pengisian." />
+    <title>Simulator Rangkaian Sepeda Motor</title>
     <link rel="stylesheet" href="./style.css" />
     <script src="./script.js" defer></script>
   </head>
@@ -30,16 +30,17 @@
     <p class="orientation-notice" role="status">Putar perangkat ke mode landscape untuk menggunakan simulator.</p>
     <main class="trainer" aria-label="Trainer rangkaian dasar">
       <section class="workspace" aria-label="Workspace komponen kelistrikan">
-        <div class="workspace-heading"><span>WORKSPACE</span></div>
+        <div class="workspace-heading"><span id="workspace-mode">WORKSPACE · KUSTOM</span></div>
         <div class="board-scroll" tabindex="0" role="region" aria-label="Area komponen; gulir untuk melihat seluruh workspace">
         <div class="board-content">
         <svg class="component-board" viewBox="0 0 1280 840" xmlns="http://www.w3.org/2000/svg" role="group" aria-label="Komponen rangkaian kelistrikan dasar">
-          <desc>Bank beban lampu, dinamo, dan klakson 12 V di atas, relay 5 pin di tengah, dua fuse di kiri, baterai di kiri bawah, dan switch di kanan bawah. Pilih warna kabel, lalu pilih dua terminal untuk menghubungkannya. Relay berpindah antara 30–87a saat coil mati dan 30–87 saat coil aktif.</desc>
+          <desc>Simulator rangkaian kustom dan mode starter, penerangan, tanda belok, serta pengisian sepeda motor. Pilih warna kabel, lalu pilih dua terminal untuk menghubungkannya. Saklar pada gambar dapat diaktifkan langsung. Relay berpindah antara 30–87a saat coil mati dan 30–87 saat coil aktif.</desc>
           <defs>
             <linearGradient id="metalShade" x1="0" x2="1" y1="0" y2="1"><stop offset="0" stop-color="#eff5f1"/><stop offset=".5" stop-color="#687d76"/><stop offset="1" stop-color="#354a47"/></linearGradient>
           </defs>
 
           <g id="load-bank" aria-label="Bank beban: lampu, dinamo, dan klakson"></g>
+          <g id="mode-control-bank" aria-label="Saklar tambahan mode rangkaian"></g>
 
           <g id="relay" class="component" data-state="off" transform="translate(510 335)" role="group" aria-label="Relay 5 pin, coil mati, kontak 30 ke 87a">
             <rect class="component-housing" width="265" height="235" rx="7" />
@@ -126,10 +127,21 @@
 
       <aside class="toolbar sidebar" aria-labelledby="tools-heading">
         <h2 id="tools-heading">Alat &amp; Fitur</h2>
+        <div class="mode-picker">
+          <label for="circuit-mode">Mode Rangkaian</label>
+          <select id="circuit-mode">
+            <option value="custom" selected>Kustom / Dasar</option>
+            <option value="starter">Sistem Starter</option>
+            <option value="lighting">Sistem Penerangan</option>
+            <option value="turn">Sistem Tanda Belok</option>
+            <option value="charging">Sistem Pengisian</option>
+          </select>
+          <p id="mode-description" aria-live="polite">Rangkai bebas dengan lampu, dinamo, dan klakson.</p>
+        </div>
         <button id="current-toggle" class="tool-button current-tool" type="button" aria-pressed="false"><svg class="card-icon current-icon" viewBox="0 0 32 32" aria-hidden="true"><path d="m18 3-12 15h9l-1 11 12-16h-9z" /></svg><span><strong>Visualisasi Arus</strong><small>Arus konvensional + → −</small></span></button>
         <button class="tool-button" type="button" data-cable="red" aria-pressed="false"><svg class="card-icon cable-red" viewBox="0 0 32 32" aria-hidden="true"><path d="M9 4v5m14 14v5M6 9h6v7H6zM20 16h6v7h-6zM9 16v5a5 5 0 0 0 10 0v-7a4 4 0 0 1 4-4" /></svg><span><strong>Kabel Merah</strong><small>Pilih dua terminal</small></span></button>
         <button class="tool-button" type="button" data-cable="black" aria-pressed="false"><svg class="card-icon cable-black" viewBox="0 0 32 32" aria-hidden="true"><path d="M9 4v5m14 14v5M6 9h6v7H6zM20 16h6v7h-6zM9 16v5a5 5 0 0 0 10 0v-7a4 4 0 0 1 4-4" /></svg><span><strong>Kabel Hitam</strong><small>Pilih dua terminal</small></span></button>
-        <div class="load-controls">
+        <div id="load-controls" class="load-controls">
           <label for="lamp-type">Jenis Lampu</label>
           <select id="lamp-type"><option value="led">LED 12 V</option><option value="incandescent" selected>Lampu Pijar 12 V</option></select>
           <label class="count-label" for="lamp-count">Jumlah Lampu</label>
@@ -140,7 +152,7 @@
           </div>
         </div>
         <p id="brightness-note" class="toolbar-note">LED berpolaritas. Pijar non-polar.</p>
-        <p class="toolbar-note">Dinamo memutar kipas; klakson berbunyi saat rangkaian mendapat arus.</p>
+        <p id="additional-load-note" class="toolbar-note">Dinamo memutar kipas; klakson berbunyi saat rangkaian mendapat arus.</p>
       </aside>
     </main>
 

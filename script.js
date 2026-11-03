@@ -1,6 +1,58 @@
 'use strict';
 
+const MODE_PROFILES = {
+  custom: {
+    label: 'Kustom',
+    description: 'Rangkai bebas dengan lampu, dinamo, dan klakson; seluruh beban disusun manual.',
+    loads: [], control: null,
+  },
+  starter: {
+    label: 'Sistem Starter',
+    description: 'Baterai, fuse, kunci kontak, relay 5 pin, tombol starter, dan motor starter. Klik tombol starter pada gambar.',
+    loads: [{ id: 'starter-motor', visual: 'starter-motor', name: 'Dinamo Starter', detail: 'Motor starter DC · 12 V' }],
+    control: 'starter-button',
+  },
+  lighting: {
+    label: 'Sistem Penerangan',
+    description: 'Lampu dekat/jauh, lampu posisi depan, lampu belakang, lampu rem, lampu panel, lampu plat nomor, dimmer, dan saklar rem. Klik kontrol pada gambar untuk memilih berkas atau menyalakan lampu rem.',
+    loads: [
+      { id: 'headlight-low', visual: 'headlight', name: 'Lampu Dekat', detail: 'Berkas low · 12 V' },
+      { id: 'headlight-high', visual: 'headlight', name: 'Lampu Jauh', detail: 'Berkas high · 12 V' },
+      { id: 'position-front', visual: 'position-light', name: 'Lampu Posisi', detail: 'Depan · 12 V' },
+      { id: 'tail-light', visual: 'tail-light', name: 'Lampu Belakang', detail: 'Tail · 12 V' },
+      { id: 'brake-light', visual: 'brake-light', name: 'Lampu Rem', detail: 'Stop · 12 V' },
+      { id: 'meter-light', visual: 'meter-light', name: 'Lampu Panel', detail: 'Meter · 12 V' },
+      { id: 'plate-light', visual: 'plate-light', name: 'Lampu Plat', detail: 'Nomor · 12 V' },
+    ],
+    control: 'dimmer',
+  },
+  turn: {
+    label: 'Sistem Tanda Belok',
+    description: 'Flasher, saklar pemilih kiri/kanan, empat lampu sein, dan indikator panel. Klik selector untuk memilih OFF, kiri, kanan, atau hazard.',
+    loads: [
+      { id: 'flasher', visual: 'flasher', name: 'Flasher', detail: 'Relay sein · 12 V' },
+      { id: 'signal-front-left', visual: 'signal', name: 'Sein Depan Kiri', detail: 'Amber · 12 V' },
+      { id: 'signal-rear-left', visual: 'signal', name: 'Sein Belakang Kiri', detail: 'Amber · 12 V' },
+      { id: 'signal-front-right', visual: 'signal', name: 'Sein Depan Kanan', detail: 'Amber · 12 V' },
+      { id: 'signal-rear-right', visual: 'signal', name: 'Sein Belakang Kanan', detail: 'Amber · 12 V' },
+      { id: 'signal-indicator', visual: 'signal', name: 'Indikator Panel', detail: 'Dashboard · 12 V' },
+    ],
+    control: 'turn-selector',
+  },
+  charging: {
+    label: 'Sistem Pengisian',
+    description: 'Stator/generator, regulator-rectifier (kiprok), indikator pengisian, fuse, dan baterai. Model ini menggambarkan konektivitas; daya pengisian fisik tidak dihitung.',
+    loads: [
+      { id: 'stator', visual: 'stator', name: 'Stator', detail: 'Generator AC · 12 V', terminals: ['AC~', 'AC~'] },
+      { id: 'regulator', visual: 'regulator', name: 'Kiprok', detail: 'Regulator / rectifier', terminals: ['AC', 'DC+'] },
+      { id: 'charge-indicator', visual: 'headlight', name: 'Indikator Isi', detail: 'Charge · 12 V' },
+    ],
+    control: null,
+  },
+};
+
 const state = {
+  mode: 'custom',
   selectedCable: null,
   firstTerminal: null,
   connections: [],
@@ -13,6 +65,11 @@ const state = {
   lamps: [],
   dynamos: [],
   horns: [],
+  modeLoads: [],
+  starterButtonOn: false,
+  brakeSwitchOn: false,
+  dimmerPosition: 'off',
+  turnSide: 'off',
   activePaths: [],
   activeSegments: [],
   relayUnstable: false,
@@ -38,9 +95,17 @@ const dockingDirections = {
   'relay-30': 'left', 'relay-85': 'left', 'relay-87a': 'up', 'relay-87': 'right', 'relay-86': 'right',
   'fuse-1-a': 'left', 'fuse-1-b': 'right', 'fuse-2-a': 'left', 'fuse-2-b': 'right',
   'switch-a': 'left', 'switch-b': 'left',
+  'starter-button-a': 'left', 'starter-button-b': 'right',
+  'brake-switch-a': 'left', 'brake-switch-b': 'right',
+  'dimmer-common': 'left', 'dimmer-low': 'right', 'dimmer-high': 'right',
+  'turn-common': 'left', 'turn-left': 'right', 'turn-right': 'right',
 };
 function dockingDirection(id) {
-  return /^(lamp|dynamo|horn)-\d+-[ab]$/.test(id) ? 'down' : dockingDirections[id];
+  return isLoadBankTerminal(id) ? 'down' : terminalElements.get(id)?.dataset.docking || dockingDirections[id];
+}
+function isLoadBankTerminal(id) {
+  return /^(lamp|dynamo|horn)-\d+-[ab]$/.test(id) ||
+    MODE_PROFILES[state.mode].loads.some(load => id === `${load.id}-a` || id === `${load.id}-b`);
 }
 
 function setStatus(message) {
@@ -111,17 +176,40 @@ function buildElectricalGraph(relayClosed) {
   add('fuse-1', 'fuse', 'fuse-1-a', 'fuse-1-b');
   add('fuse-2', 'fuse', 'fuse-2-a', 'fuse-2-b');
   if (state.switchOn) add('switch', 'switch', 'switch-a', 'switch-b');
+  if (state.mode === 'starter' && state.starterButtonOn) {
+    add('starter-button-contact', 'switch', 'starter-button-a', 'starter-button-b');
+  }
+  if (state.mode === 'lighting' && state.brakeSwitchOn) {
+    add('brake-switch-contact', 'switch', 'brake-switch-a', 'brake-switch-b');
+  }
+  if (state.mode === 'lighting' && state.dimmerPosition === 'low') {
+    add('dimmer-contact-low', 'switch', 'dimmer-common', 'dimmer-low');
+  } else if (state.mode === 'lighting' && state.dimmerPosition === 'high') {
+    add('dimmer-contact-high', 'switch', 'dimmer-common', 'dimmer-high');
+  }
+  if (state.mode === 'turn' && (state.turnSide === 'left' || state.turnSide === 'hazard')) {
+    add('turn-contact-left', 'switch', 'turn-common', 'turn-left');
+  }
+  if (state.mode === 'turn' && (state.turnSide === 'right' || state.turnSide === 'hazard')) {
+    add('turn-contact-right', 'switch', 'turn-common', 'turn-right');
+  }
   if (relayClosed) add('relay-contact', 'relay-contact', 'relay-30', 'relay-87');
   else add('relay-contact-nc', 'relay-contact', 'relay-30', 'relay-87a');
   add('relay-coil', 'relay-coil', 'relay-85', 'relay-86', true);
-  for (let n = 1; n <= state.lampCount; n++) {
-    add(`lamp-${n}`, state.lampType === 'led' ? 'lamp-led' : 'lamp-incandescent', `lamp-${n}-a`, `lamp-${n}-b`, true, state.lampType === 'led');
-  }
-  for (let n = 1; n <= state.dynamoCount; n++) {
-    add('dynamo-' + n, 'dynamo', 'dynamo-' + n + '-a', 'dynamo-' + n + '-b', true);
-  }
-  for (let n = 1; n <= state.hornCount; n++) {
-    add('horn-' + n, 'horn', 'horn-' + n + '-a', 'horn-' + n + '-b', true);
+  if (state.mode === 'custom') {
+    for (let n = 1; n <= state.lampCount; n++) {
+      add(`lamp-${n}`, state.lampType === 'led' ? 'lamp-led' : 'lamp-incandescent', `lamp-${n}-a`, `lamp-${n}-b`, true, state.lampType === 'led');
+    }
+    for (let n = 1; n <= state.dynamoCount; n++) {
+      add('dynamo-' + n, 'dynamo', 'dynamo-' + n + '-a', 'dynamo-' + n + '-b', true);
+    }
+    for (let n = 1; n <= state.hornCount; n++) {
+      add('horn-' + n, 'horn', 'horn-' + n + '-a', 'horn-' + n + '-b', true);
+    }
+  } else {
+    MODE_PROFILES[state.mode].loads.forEach(load => {
+      add(load.id, 'mode-load', `${load.id}-a`, `${load.id}-b`, true);
+    });
   }
   return edges;
 }
@@ -132,8 +220,8 @@ function analyzeClosedPaths(edges) {
     conductors.get(edge.from).push({ ...edge });
     conductors.get(edge.to).push({ ...edge, from: edge.to, to: edge.from });
   });
-  // Collapse ideal conductor nets first. Enumerating only load paths is bounded
-  // by at most four selectable loads plus one coil, even with dense or cyclic wiring.
+  // Collapse ideal conductor nets first. A mode has at most seven selected loads
+  // plus the relay coil, even with dense or cyclic wiring.
   const netOf = new Map();
   for (const terminal of conductors.keys()) {
     if (netOf.has(terminal)) continue;
@@ -221,12 +309,15 @@ function evaluateCircuit() {
   const suppressed = result.short || state.relayUnstable;
   state.activePaths = suppressed ? [] : result.paths;
   state.activeSegments = suppressed ? [] : result.activeSegments;
-  state.lamps = Array.from({ length: state.lampCount }, (_, i) => ({ id: `lamp-${i + 1}`, on: !suppressed && result.activeLoads.has(`lamp-${i + 1}`) }));
-  state.dynamos = Array.from({ length: state.dynamoCount }, (_, i) => ({
+  state.lamps = state.mode === 'custom' ? Array.from({ length: state.lampCount }, (_, i) => ({ id: `lamp-${i + 1}`, on: !suppressed && result.activeLoads.has(`lamp-${i + 1}`) })) : [];
+  state.dynamos = state.mode === 'custom' ? Array.from({ length: state.dynamoCount }, (_, i) => ({
     id: 'dynamo-' + (i + 1), on: !suppressed && result.activeLoads.has('dynamo-' + (i + 1))
-  }));
-  state.horns = Array.from({ length: state.hornCount }, (_, i) => ({
+  })) : [];
+  state.horns = state.mode === 'custom' ? Array.from({ length: state.hornCount }, (_, i) => ({
     id: 'horn-' + (i + 1), on: !suppressed && result.activeLoads.has('horn-' + (i + 1))
+  })) : [];
+  state.modeLoads = MODE_PROFILES[state.mode].loads.map(load => ({
+    ...load, on: !suppressed && result.activeLoads.has(load.id),
   }));
   updateLampPower(result);
 }
@@ -285,23 +376,64 @@ function loadTerminals(id, name, polarities, labels) {
   }).join('');
 }
 
+function modeArtwork(load) {
+  const leads = '<path class="load-lead" d="M-80 128V120H-46V88M46 88V120H80V128"/>';
+  if (load.visual === 'headlight') return '<path class="load-lead" d="M-80 128V120H-48V88M48 88V120H80V128"/>' +
+    '<path class="headlight-shell" d="M-39 42h78q8 0 8 9v32q0 9-8 9h-78q-8 0-8-9V51q0-9 8-9Z"/>' +
+    '<ellipse class="headlight-lens" cx="0" cy="66" rx="28" ry="16"/><path d="M-20 66h40"/>';
+  if (load.visual === 'tail-light' || load.visual === 'brake-light') return '<path class="load-lead" d="M-80 128V120H-42V87M42 87V120H80V128"/>' +
+    '<rect class="tail-shell" x="-42" y="45" width="84" height="50" rx="12"/>' +
+    '<path class="tail-lens" d="M-31 55h62v30h-62z"/><path d="M-25 59v22m50-22v22"/>';
+  if (load.visual === 'position-light' || load.visual === 'meter-light' || load.visual === 'plate-light') {
+    const lensClass = { 'position-light': 'position-lens', 'meter-light': 'meter-lens', 'plate-light': 'plate-lens' }[load.visual];
+    return leads + '<rect class="headlight-shell" x="-38" y="43" width="76" height="56" rx="13"/>' +
+      '<circle class="' + lensClass + '" cx="0" cy="71" r="19"/><path d="M-7 97v9m14-9v9"/>';
+  }
+  if (load.visual === 'signal') return '<path class="load-lead" d="M-80 128V120H-41V82M41 82V120H80V128"/>' +
+    '<rect class="signal-shell" x="-42" y="46" width="84" height="54" rx="14"/>' +
+    '<ellipse class="signal-lens" cx="0" cy="73" rx="27" ry="17"/><path d="M-23 73h46"/>';
+  if (load.visual === 'flasher') return leads +
+    '<rect class="flasher-shell" x="-39" y="42" width="78" height="62" rx="9"/>' +
+    '<path class="flasher-mark" d="M7 51-12 75h15l-8 21 20-29H0z"/>';
+  if (load.visual === 'stator') return '<path class="load-lead" d="M-80 128V120H-47V91M47 91V120H80V128"/>' +
+    '<circle class="stator-shell" cx="0" cy="69" r="39"/>' +
+    '<path class="stator-coil" d="M-23 53q-9 16 0 32t0 0m15-38q-9 16 0 32t0 0m15-32q-9 16 0 32t0 0m15-26q-9 16 0 32"/>';
+  if (load.visual === 'regulator') return leads +
+    '<rect class="regulator-shell" x="-43" y="43" width="86" height="60" rx="8"/>' +
+    '<path class="regulator-fin" d="M-31 52h62m-62 10h62m-62 10h62m-62 10h62m-62 10h62"/>' +
+    '<circle cx="0" cy="72" r="7" fill="#243238" stroke="#d8e4dd" stroke-width="2"/>';
+  if (load.visual === 'starter-motor') return '<path class="load-lead" d="M-80 128V120H-44V93M44 93V120H80V128"/>' +
+    '<rect class="starter-motor-shell" x="-46" y="42" width="92" height="58" rx="23"/>' +
+    '<path d="M-47 53h-9v36h9m93-36h9v36h-9"/>' +
+    '<g class="starter-rotor" transform="translate(0 71)"><circle r="18" fill="#1c292e" stroke="#a5bbb0" stroke-width="2"/><path d="M-13 0h26m-13-13v26m-9-9 18-18m0 18L-9-9" stroke="#68d3a6" stroke-width="3"/></g>';
+  return '';
+}
+
 function renderLoadBank() {
   const entries = [];
-  for (let n = 1; n <= state.lampCount; n++) {
-    entries.push({ id: 'lamp-' + n, type: 'lamp', name: 'Lampu ' + (state.lampType === 'led' ? 'LED' : 'Pijar') + ' ' + n });
+  if (state.mode === 'custom') {
+    for (let n = 1; n <= state.lampCount; n++) {
+      entries.push({ id: 'lamp-' + n, kind: 'custom', type: 'lamp', visual: 'lamp', name: 'Lampu ' + (state.lampType === 'led' ? 'LED' : 'Pijar') + ' ' + n });
+    }
+    for (let n = 1; n <= state.dynamoCount; n++) entries.push({ id: 'dynamo-' + n, kind: 'custom', type: 'dynamo', visual: 'dynamo', name: 'Dinamo ' + n });
+    for (let n = 1; n <= state.hornCount; n++) entries.push({ id: 'horn-' + n, kind: 'custom', type: 'horn', visual: 'horn', name: 'Klakson ' + n });
+  } else {
+    entries.push(...MODE_PROFILES[state.mode].loads.map(load => ({ ...load, kind: 'mode' })));
   }
-  for (let n = 1; n <= state.dynamoCount; n++) entries.push({ id: 'dynamo-' + n, type: 'dynamo', name: 'Dinamo ' + n });
-  for (let n = 1; n <= state.hornCount; n++) entries.push({ id: 'horn-' + n, type: 'horn', name: 'Klakson ' + n });
 
   const bank = document.getElementById('load-bank');
+  bank.setAttribute('aria-label', state.mode === 'custom'
+    ? 'Beban kustom: lampu, dinamo, dan klakson'
+    : 'Komponen ' + MODE_PROFILES[state.mode].label);
   const total = entries.length;
   bank.innerHTML = entries.map((load, index) => {
-    const x = total === 1 ? 640 : 140 + index * 1000 / (total - 1);
+    const x = total === 1 ? 640 : total > 4 ? 110 + index * 1060 / (total - 1) : 140 + index * 1000 / (total - 1);
     const transform = 'translate(' + x + ' 35)';
     let artwork = '';
-    let detail = '';
-
-    if (load.type === 'lamp') {
+    let detail = load.detail || '';
+    if (load.kind === 'mode') {
+      artwork = modeArtwork(load);
+    } else if (load.type === 'lamp') {
       const led = state.lampType === 'led';
       detail = '12 V · ' + (led ? 'berpolaritas' : 'non-polar');
       artwork = '<path class="lamp-light" d="M-19 72C-19 57-34 55-34 34a34 34 0 0 1 68 0c0 21-15 23-15 38Z" />' +
@@ -331,10 +463,11 @@ function renderLoadBank() {
         '<path class="horn-wave" d="M37 51q13 17 0 34m8-43q21 26 0 52"/>';
     }
 
-    const polarities = load.type === 'lamp' && state.lampType === 'led' ? ['positive', 'negative'] : ['none', 'none'];
-    const labels = polarities[0] === 'positive' ? ['+', '−'] : ['A', 'B'];
+    const polarities = load.kind === 'custom' && load.type === 'lamp' && state.lampType === 'led' ? ['positive', 'negative'] : ['none', 'none'];
+    const labels = load.terminals || (polarities[0] === 'positive' ? ['+', '−'] : ['A', 'B']);
     const terminals = loadTerminals(load.id, load.name, polarities, labels);
-    return '<g id="' + load.id + '" class="component load-component ' + load.type + '-load" transform="' + transform +
+    const visualType = load.kind === 'mode' ? load.visual : load.type;
+    return '<g id="' + load.id + '" class="component load-component ' + visualType + '-load" transform="' + transform +
       '" role="group" aria-label="' + load.name + ', ' + detail + '">' +
       artwork + terminals +
       '<text class="component-label" x="0" y="164">' + load.name + '</text>' +
@@ -343,8 +476,96 @@ function renderLoadBank() {
   refreshTerminals();
 }
 
+function renderModeControls() {
+  const bank = document.getElementById('mode-control-bank');
+  const control = MODE_PROFILES[state.mode].control;
+  if (control === 'starter-button') {
+    bank.innerHTML = '<g id="starter-button" class="component mode-switch" data-mode-control="starter-button" transform="translate(950 465)" role="button" tabindex="0" aria-label="Tombol starter OFF" aria-pressed="false">' +
+      '<text class="selector-label" x="0" y="12">TOMBOL STARTER</text><rect class="mode-switch-panel" x="-67" y="24" width="134" height="74" rx="13"/>' +
+      '<rect class="mode-switch-face" x="-25" y="39" width="50" height="42" rx="9"/><path id="starter-button-mark" class="selector-contact" d="M-12 60h24"/>' +
+      '<circle id="starter-button-a" class="terminal" data-docking="left" cx="-92" cy="62" r="9" aria-label="Tombol starter terminal input"/><circle class="terminal-hit-area" data-terminal-id="starter-button-a" cx="-92" cy="62" r="1" aria-hidden="true"/>' +
+      '<circle id="starter-button-b" class="terminal" data-docking="right" cx="92" cy="62" r="9" aria-label="Tombol starter terminal output"/><circle class="terminal-hit-area" data-terminal-id="starter-button-b" cx="92" cy="62" r="1" aria-hidden="true"/>' +
+      '<text class="detail-label" x="0" y="119">Klik gambar · terminal A/B</text><rect class="mode-switch-hit" x="-60" y="28" width="120" height="66" rx="10"/></g>';
+  } else if (control === 'dimmer') {
+    bank.innerHTML = '<g id="dimmer-selector" class="component mode-switch" data-mode-control="dimmer" data-position="off" transform="translate(950 465)" role="button" tabindex="0" aria-label="Selector lampu OFF" aria-pressed="false">' +
+      '<text class="selector-label" x="0" y="10">SAKLAR DIMMER</text><rect class="mode-switch-panel" x="-64" y="20" width="128" height="94" rx="12"/>' +
+      '<path d="M-42 46h84M-42 89h84"/><path id="dimmer-contact" class="selector-contact" d="M-13 67h22"/>' +
+      '<circle id="dimmer-common" class="terminal" data-docking="left" cx="-92" cy="68" r="9" aria-label="Dimmer common"/><circle class="terminal-hit-area" data-terminal-id="dimmer-common" cx="-92" cy="68" r="1" aria-hidden="true"/>' +
+      '<circle id="dimmer-low" class="terminal" data-docking="right" cx="92" cy="46" r="9" aria-label="Dimmer lampu dekat"/><circle class="terminal-hit-area" data-terminal-id="dimmer-low" cx="92" cy="46" r="1" aria-hidden="true"/>' +
+      '<circle id="dimmer-high" class="terminal" data-docking="right" cx="92" cy="89" r="9" aria-label="Dimmer lampu jauh"/><circle class="terminal-hit-area" data-terminal-id="dimmer-high" cx="92" cy="89" r="1" aria-hidden="true"/>' +
+      '<text class="detail-label" x="0" y="60">LOW</text><text class="detail-label" x="0" y="105">HIGH</text><text id="dimmer-status" class="selector-label" x="0" y="136">OFF</text>' +
+      '<rect class="mode-switch-hit" x="-58" y="23" width="116" height="87" rx="9"/></g>';
+  } else if (control === 'turn-selector') {
+    bank.innerHTML = '<g id="turn-selector" class="component mode-switch" data-mode-control="turn-selector" data-position="off" transform="translate(950 465)" role="button" tabindex="0" aria-label="Saklar sein OFF" aria-pressed="false">' +
+      '<text class="selector-label" x="0" y="10">SAKLAR SEIN</text><rect class="mode-switch-panel" x="-64" y="20" width="128" height="94" rx="12"/>' +
+      '<path d="M-42 46h84M-42 89h84"/><path id="turn-contact" class="selector-contact" d="M-13 67h22"/>' +
+      '<circle id="turn-common" class="terminal" data-docking="left" cx="-92" cy="68" r="9" aria-label="Saklar sein common"/><circle class="terminal-hit-area" data-terminal-id="turn-common" cx="-92" cy="68" r="1" aria-hidden="true"/>' +
+      '<circle id="turn-left" class="terminal" data-docking="right" cx="92" cy="46" r="9" aria-label="Saklar sein kiri"/><circle class="terminal-hit-area" data-terminal-id="turn-left" cx="92" cy="46" r="1" aria-hidden="true"/>' +
+      '<circle id="turn-right" class="terminal" data-docking="right" cx="92" cy="89" r="9" aria-label="Saklar sein kanan"/><circle class="terminal-hit-area" data-terminal-id="turn-right" cx="92" cy="89" r="1" aria-hidden="true"/>' +
+      '<text class="detail-label" x="0" y="60">KIRI</text><text class="detail-label" x="0" y="105">KANAN</text><text id="turn-status" class="selector-label" x="0" y="136">OFF</text>' +
+      '<rect class="mode-switch-hit" x="-58" y="23" width="116" height="87" rx="9"/></g>';
+  } else {
+    bank.replaceChildren();
+  }
+  if (state.mode === 'lighting') {
+    bank.insertAdjacentHTML('beforeend', '<g id="brake-switch" class="component mode-switch" data-mode-control="brake-switch" transform="translate(1110 465)" role="button" tabindex="0" aria-label="Saklar rem OFF" aria-pressed="false">' +
+      '<text class="selector-label" x="0" y="12">SAKLAR REM</text><rect class="mode-switch-panel" x="-58" y="22" width="116" height="70" rx="12"/>' +
+      '<rect class="mode-switch-face" x="-23" y="37" width="46" height="40" rx="8"/><path id="brake-switch-mark" class="selector-contact" d="M-11 57h22"/>' +
+      '<circle id="brake-switch-a" class="terminal" data-docking="left" cx="-82" cy="57" r="9" aria-label="Saklar rem terminal input"/><circle class="terminal-hit-area" data-terminal-id="brake-switch-a" cx="-82" cy="57" r="1" aria-hidden="true"/>' +
+      '<circle id="brake-switch-b" class="terminal" data-docking="right" cx="82" cy="57" r="9" aria-label="Saklar rem terminal output"/><circle class="terminal-hit-area" data-terminal-id="brake-switch-b" cx="82" cy="57" r="1" aria-hidden="true"/>' +
+      '<text id="brake-switch-status" class="detail-label" x="0" y="111">OFF</text><rect class="mode-switch-hit" x="-52" y="26" width="104" height="62" rx="9"/></g>');
+  }
+  refreshTerminals();
+  updateModeControlVisuals();
+}
+
+function updateModeControlVisuals() {
+  document.querySelectorAll('[data-mode-control]').forEach(control => {
+    const name = control.dataset.modeControl;
+    const position = name === 'starter-button' ? (state.starterButtonOn ? 'on' : 'off') :
+      name === 'brake-switch' ? (state.brakeSwitchOn ? 'on' : 'off') :
+        name === 'dimmer' ? state.dimmerPosition : state.turnSide;
+    control.dataset.position = position;
+    control.classList.toggle('is-on', position !== 'off');
+    control.setAttribute('aria-pressed', String(position !== 'off'));
+    if (name === 'starter-button') {
+      control.setAttribute('aria-label', `Tombol starter ${state.starterButtonOn ? 'ON' : 'OFF'}`);
+      document.getElementById('starter-button-mark').setAttribute('d', state.starterButtonOn ? 'M-12 60h24' : 'M-12 72 12 48');
+    } else if (name === 'brake-switch') {
+      control.setAttribute('aria-label', `Saklar rem ${state.brakeSwitchOn ? 'ON' : 'OFF'}`);
+      document.getElementById('brake-switch-status').textContent = state.brakeSwitchOn ? 'ON' : 'OFF';
+    } else if (name === 'dimmer') {
+      document.getElementById('dimmer-contact').setAttribute('d', state.dimmerPosition === 'low' ? 'M-13 67 35 46' :
+        state.dimmerPosition === 'high' ? 'M-13 67 35 89' : 'M-13 67h22');
+      document.getElementById('dimmer-status').textContent = state.dimmerPosition.toUpperCase();
+      control.setAttribute('aria-label', 'Selector lampu ' + state.dimmerPosition.toUpperCase());
+    } else {
+      document.getElementById('turn-contact').setAttribute('d', state.turnSide === 'left' ? 'M-13 67 35 46' :
+        state.turnSide === 'right' ? 'M-13 67 35 89' : state.turnSide === 'hazard' ? 'M-13 67H20M20 67 35 46M20 67 35 89' : 'M-13 67h22');
+      document.getElementById('turn-status').textContent = state.turnSide.toUpperCase();
+      control.setAttribute('aria-label', 'Saklar sein ' + state.turnSide.toUpperCase());
+    }
+  });
+}
+
+function toggleModeControl(name) {
+  if (name === 'starter-button') state.starterButtonOn = !state.starterButtonOn;
+  else if (name === 'brake-switch') state.brakeSwitchOn = !state.brakeSwitchOn;
+  else if (name === 'dimmer') {
+    state.dimmerPosition = ({ off: 'low', low: 'high', high: 'off' })[state.dimmerPosition];
+  } else if (name === 'turn-selector') {
+    state.turnSide = ({ off: 'left', left: 'right', right: 'hazard', hazard: 'off' })[state.turnSide];
+  } else return;
+  evaluateCircuit();
+  const message = name === 'starter-button' ? `Tombol starter ${state.starterButtonOn ? 'ON' : 'OFF'}.` :
+    name === 'brake-switch' ? `Saklar rem ${state.brakeSwitchOn ? 'ON' : 'OFF'}.` :
+      name === 'dimmer' ? `Dimmer ${state.dimmerPosition.toUpperCase()}.` : `Saklar sein ${state.turnSide.toUpperCase()}.`;
+  updateComponentVisuals(message);
+}
+
 function updateComponentVisuals(message) {
   updateSwitchVisual();
+  updateModeControlVisuals();
   const relay = document.getElementById('relay');
   relay.dataset.state = state.relayEnergized ? 'on' : 'off';
   relay.classList.toggle('is-energized', state.relayEnergized);
@@ -370,6 +591,17 @@ function updateComponentVisuals(message) {
     horn.classList.toggle('is-on', on);
     horn.setAttribute('aria-label', 'Klakson ' + (i + 1) + ', ' + (on ? 'berbunyi' : 'mati'));
   });
+  state.modeLoads.forEach(({ id, name, on }) => {
+    const component = document.getElementById(id);
+    component.classList.toggle('is-on', on);
+    component.setAttribute('aria-label', `${name}, ${on ? 'aktif' : 'tidak aktif'}`);
+  });
+  document.getElementById('circuit-mode').value = state.mode;
+  document.getElementById('workspace-mode').textContent = 'WORKSPACE · ' + MODE_PROFILES[state.mode].label.toUpperCase();
+  document.getElementById('mode-description').textContent = MODE_PROFILES[state.mode].description;
+  document.getElementById('load-controls').hidden = state.mode !== 'custom';
+  document.getElementById('additional-load-note').hidden = state.mode !== 'custom';
+  document.getElementById('brightness-note').hidden = state.mode !== 'custom';
   document.getElementById('lamp-type').value = state.lampType;
   document.getElementById('lamp-count').textContent = `${state.lampCount} lampu`;
   document.getElementById('remove-lamp').disabled = state.lampCount === 1;
@@ -384,8 +616,8 @@ function updateComponentVisuals(message) {
   document.getElementById('undo-button').disabled = state.connections.length === 0;
   document.getElementById('current-toggle').setAttribute('aria-pressed', String(state.currentVisualizationOn));
   document.getElementById('brightness-note').textContent = state.lamps.some(lamp => lamp.brightnessModel === 'unsupported-mixed-nominal')
-    ? 'Rangkaian campuran: terang nominal; daya detail belum dihitung.'
-    : state.lampType === 'incandescent' ? 'Pijar identik seri: daya 1/n². Pendekatan resistansi tetap.' : 'LED berpolaritas. Pijar non-polar.';
+      ? 'Rangkaian campuran: terang nominal; daya detail belum dihitung.'
+      : state.lampType === 'incandescent' ? 'Pijar identik seri: daya 1/n². Pendekatan resistansi tetap.' : 'LED berpolaritas. Pijar non-polar.';
   renderCurrentVisualization();
   if (state.horns.some(horn => horn.on)) startHornTone();
   else stopHornTone();
@@ -716,8 +948,8 @@ function redrawWires() {
   const groups = document.createDocumentFragment();
   state.connections.forEach(connection => {
     const start = terminalCenter(connection.from, rect), end = terminalCenter(connection.to, rect);
-    const fromLoad = /^(lamp|dynamo|horn)-\d+-[ab]$/.test(connection.from);
-    const toLoad = /^(lamp|dynamo|horn)-\d+-[ab]$/.test(connection.to);
+    const fromLoad = isLoadBankTerminal(connection.from);
+    const toLoad = isLoadBankTerminal(connection.to);
     const startPort = fromLoad ? { x: start.x, y: start.y + 18 } : portFor(connection.from, start);
     const endPort = toLoad ? { x: end.x, y: end.y + 18 } : portFor(connection.to, end);
     const points = fromLoad || toLoad
@@ -767,6 +999,12 @@ function internalCurrentGeometry(segment) {
     'fuse-1': ['fuse-1-a', 'M0 0H50c0-13 15-13 25 0s25 13 25 0H150'],
     'fuse-2': ['fuse-2-a', 'M0 66H50c0-13 15-13 25 0s25 13 25 0H150'],
     switch: ['switch-a', 'M0 20H65Q72 20 72 27V75Q72 82 65 82H0'],
+    'starter-button-contact': ['starter-button-a', 'M-92 62H-25H25H92'],
+    'brake-switch-contact': ['brake-switch-a', 'M-82 57H-23H23H82'],
+    'dimmer-contact-low': ['dimmer-common', 'M-92 68H-64H-13L35 46H64H92'],
+    'dimmer-contact-high': ['dimmer-common', 'M-92 68H-64H-13L35 89H64H92'],
+    'turn-contact-left': ['turn-common', 'M-92 68H-64H-13L35 46H64H92'],
+    'turn-contact-right': ['turn-common', 'M-92 68H-64H-13L35 89H64H92'],
     'relay-contact': ['relay-30', 'M-18 82H120H210H283'],
     'relay-contact-nc': ['relay-30', 'M-18 82H120L132 38V-18'],
     'relay-coil': ['relay-85', 'M-18 181H85c0-36 24-36 24 0 0-36 24-36 24 0 0-36 24-36 24 0 0-36 23-36 23 0H283'],
@@ -778,6 +1016,8 @@ function internalCurrentGeometry(segment) {
     definition = [segment.id + '-a', 'M-80 128V120H-31V68H31V120H80V128'];
   } else if (segment.type === 'horn') {
     definition = [segment.id + '-a', 'M-80 128V120H-31V72H31V120H80V128'];
+  } else if (segment.type === 'mode-load') {
+    definition = [segment.id + '-a', 'M-80 128V120H-46V88H46V120H80V128'];
   }
   if (!definition) return null;
   const from = definition[0], d = definition[1], id = 'current-geometry-' + segment.id;
@@ -873,13 +1113,47 @@ terminalElements.forEach(terminal => {
 board.addEventListener('click', event => {
   const target = event.target.closest('.terminal, .terminal-hit-area');
   if (target) selectTerminal(target.dataset.terminalId || target.id);
+  const modeControl = event.target.closest('[data-mode-control]');
+  if (modeControl && !event.target.closest('.terminal, .terminal-hit-area')) {
+    toggleModeControl(modeControl.dataset.modeControl);
+  }
 });
 board.addEventListener('keydown', event => {
   if (event.target.matches('.terminal') && (event.key === 'Enter' || event.key === ' ')) {
     event.preventDefault();
     selectTerminal(event.target.id);
+    return;
+  }
+  const modeControl = event.target.closest('[data-mode-control]');
+  if (modeControl && (event.key === 'Enter' || event.key === ' ') && !event.repeat) {
+    event.preventDefault();
+    toggleModeControl(modeControl.dataset.modeControl);
   }
 });
+
+function changeCircuitMode(mode) {
+  if (!Object.prototype.hasOwnProperty.call(MODE_PROFILES, mode) || mode === state.mode) return;
+  state.mode = mode;
+  state.connections = [];
+  state.firstTerminal = null;
+  state.selectedCable = null;
+  state.switchOn = false;
+  state.relayEnergized = false;
+  state.currentVisualizationOn = false;
+  state.starterButtonOn = false;
+  state.brakeSwitchOn = false;
+  state.dimmerPosition = 'off';
+  state.turnSide = 'off';
+  nextWireId = 1;
+  wireLayer.replaceChildren();
+  renderLoadBank();
+  renderModeControls();
+  updateSelection();
+  evaluateCircuit();
+  updateComponentVisuals(`Mode ${MODE_PROFILES[mode].label} dipilih. Rangkaian kosong, silakan pasang kabel.`);
+  redrawWires();
+}
+document.getElementById('circuit-mode').addEventListener('change', event => changeCircuitMode(event.target.value));
 
 document.getElementById('reset-button').addEventListener('click', () => {
   state.connections = [];
@@ -887,12 +1161,18 @@ document.getElementById('reset-button').addEventListener('click', () => {
   state.selectedCable = null;
   state.switchOn = false;
   state.relayEnergized = false;
+  state.mode = 'custom';
+  state.starterButtonOn = false;
+  state.brakeSwitchOn = false;
+  state.dimmerPosition = 'off';
+  state.turnSide = 'off';
   state.currentVisualizationOn = false;
   state.lampType = 'incandescent';
   state.lampCount = 1;
   state.dynamoCount = 0;
   state.hornCount = 0;
   renderLoadBank();
+  renderModeControls();
   nextWireId = 1;
   wireLayer.replaceChildren();
   updateSelection();
@@ -947,6 +1227,7 @@ if (typeof ResizeObserver !== 'undefined') {
 }
 
 document.getElementById('lamp-type').addEventListener('change', event => {
+  if (state.mode !== 'custom') return;
   state.lampType = event.target.value === 'incandescent' ? 'incandescent' : 'led';
   renderLoadBank();
   evaluateCircuit();
@@ -954,6 +1235,7 @@ document.getElementById('lamp-type').addEventListener('change', event => {
   redrawWires();
 });
 function changeLoadCount(type, delta) {
+  if (state.mode !== 'custom') return;
   const property = type === 'lamp' ? 'lampCount' : type === 'dynamo' ? 'dynamoCount' : 'hornCount';
   const minimum = type === 'lamp' ? 1 : 0;
   const current = state[property];
@@ -977,6 +1259,7 @@ document.getElementById('remove-horn').addEventListener('click', () => changeLoa
 
 
 renderLoadBank();
+renderModeControls();
 evaluateCircuit();
 updateComponentVisuals('Pilih kabel merah atau hitam.');
 
