@@ -8,7 +8,11 @@ const state = {
   relayEnergized: false,
   lampType: 'incandescent',
   lampCount: 1,
+  dynamoCount: 0,
+  hornCount: 0,
   lamps: [],
+  dynamos: [],
+  horns: [],
   activePaths: [],
   activeSegments: [],
   relayUnstable: false,
@@ -25,6 +29,8 @@ const terminalElements = new Map(
 );
 let nextWireId = 1;
 let redrawFrame = null;
+let audioContext = null;
+let hornNodes = null;
 
 // Visual docking only: never used by the electrical graph.
 const dockingDirections = {
@@ -33,7 +39,9 @@ const dockingDirections = {
   'fuse-1-a': 'left', 'fuse-1-b': 'right', 'fuse-2-a': 'left', 'fuse-2-b': 'right',
   'switch-a': 'left', 'switch-b': 'left',
 };
-function dockingDirection(id) { return id.startsWith('lamp-') ? 'down' : dockingDirections[id]; }
+function dockingDirection(id) {
+  return /^(lamp|dynamo|horn)-\d+-[ab]$/.test(id) ? 'down' : dockingDirections[id];
+}
 
 function setStatus(message) {
   const reverseFeedback = reverseLEDFeedback();
@@ -109,6 +117,12 @@ function buildElectricalGraph(relayClosed) {
   for (let n = 1; n <= state.lampCount; n++) {
     add(`lamp-${n}`, state.lampType === 'led' ? 'lamp-led' : 'lamp-incandescent', `lamp-${n}-a`, `lamp-${n}-b`, true, state.lampType === 'led');
   }
+  for (let n = 1; n <= state.dynamoCount; n++) {
+    add('dynamo-' + n, 'dynamo', 'dynamo-' + n + '-a', 'dynamo-' + n + '-b', true);
+  }
+  for (let n = 1; n <= state.hornCount; n++) {
+    add('horn-' + n, 'horn', 'horn-' + n + '-a', 'horn-' + n + '-b', true);
+  }
   return edges;
 }
 
@@ -119,7 +133,7 @@ function analyzeClosedPaths(edges) {
     conductors.get(edge.to).push({ ...edge, from: edge.to, to: edge.from });
   });
   // Collapse ideal conductor nets first. Enumerating only load paths is bounded
-  // by at most four lamps plus one coil, even with dense or cyclic wiring.
+  // by at most four selectable loads plus one coil, even with dense or cyclic wiring.
   const netOf = new Map();
   for (const terminal of conductors.keys()) {
     if (netOf.has(terminal)) continue;
@@ -208,6 +222,12 @@ function evaluateCircuit() {
   state.activePaths = suppressed ? [] : result.paths;
   state.activeSegments = suppressed ? [] : result.activeSegments;
   state.lamps = Array.from({ length: state.lampCount }, (_, i) => ({ id: `lamp-${i + 1}`, on: !suppressed && result.activeLoads.has(`lamp-${i + 1}`) }));
+  state.dynamos = Array.from({ length: state.dynamoCount }, (_, i) => ({
+    id: 'dynamo-' + (i + 1), on: !suppressed && result.activeLoads.has('dynamo-' + (i + 1))
+  }));
+  state.horns = Array.from({ length: state.hornCount }, (_, i) => ({
+    id: 'horn-' + (i + 1), on: !suppressed && result.activeLoads.has('horn-' + (i + 1))
+  }));
   updateLampPower(result);
 }
 
@@ -228,7 +248,8 @@ function updateLampPower(result) {
     lamp.brightnessModel = lamp.on ? 'led-nominal' : 'off';
     if (!lamp.on || state.lampType !== 'incandescent') return;
     const strings = state.activePaths.filter(path => path.segments.some(edge => edge.id === lamp.id))
-      .map(path => path.segments.filter(edge => edge.type.startsWith('lamp-') || edge.type === 'relay-coil'));
+      .map(path => path.segments.filter(edge => edge.type.startsWith('lamp-') ||
+        edge.type === 'relay-coil' || edge.type === 'dynamo' || edge.type === 'horn'));
     const signatures = new Set(strings.map(string => string.map(edge => edge.id).sort().join(',')));
     const simple = signatures.size === 1 && strings.every(string =>
       string.every(edge => edge.type === 'lamp-incandescent') &&
@@ -252,18 +273,72 @@ function refreshTerminals() {
   updateSelection();
 }
 
-function renderLampBank() {
-  const led = state.lampType === 'led';
-  document.getElementById('lamp-bank').innerHTML = Array.from({ length: state.lampCount }, (_, i) => {
-    const n = i + 1, x = state.lampCount === 1 ? 640 : 140 + i * 1000 / (state.lampCount - 1);
-    const name = `Lampu ${led ? 'LED' : 'Pijar'} ${n}`;
-    return `<g id="lamp-${n}" class="component" transform="translate(${x} 35)" role="group" aria-label="${name}">
-      <path class="lamp-light" d="M-19 72C-19 57-34 55-34 34a34 34 0 0 1 68 0c0 21-15 23-15 38Z" />
-      <path d="M-19 72C-19 57-34 55-34 34a34 34 0 0 1 68 0c0 21-15 23-15 38M-21 72h42v13h-42zM-18 85v10q0 9 10 9H8q10 0 10-9V85M-8 72-13 38q-1-8 5-5l8 7 8-7q6-3 5 5L8 72M-16 104v16h-64v8M16 104v16h64v8" />
-      ${['a', 'b'].map((side, j) => `<circle id="lamp-${n}-${side}" class="terminal" data-polarity="${led ? (j ? 'negative' : 'positive') : 'none'}" cx="${j ? 80 : -80}" cy="128" r="9" aria-label="${name} terminal ${led ? (j ? 'negatif' : 'positif') : side.toUpperCase()}"></circle>
-      <circle class="terminal-hit-area" data-terminal-id="lamp-${n}-${side}" cx="${j ? 80 : -80}" cy="128" r="1" aria-hidden="true" />
-      <text class="terminal-label" x="${j ? 80 : -80}" y="106">${led ? (j ? '−' : '+') : side.toUpperCase()}</text>`).join('')}
-      <text class="component-label" x="0" y="164">${name}</text><text class="detail-label" x="0" y="187">12 V · ${led ? 'berpolaritas' : 'non-polar'}</text></g>`;
+function loadTerminals(id, name, polarities, labels) {
+  return ['a', 'b'].map((side, index) => {
+    const x = index ? 80 : -80;
+    const label = labels[index];
+    return '<circle id="' + id + '-' + side + '" class="terminal" data-polarity="' + polarities[index] +
+      '" cx="' + x + '" cy="128" r="9" aria-label="' + name + ' terminal ' + label + '"></circle>' +
+      '<circle class="terminal-hit-area" data-terminal-id="' + id + '-' + side +
+      '" cx="' + x + '" cy="128" r="1" aria-hidden="true" />' +
+      '<text class="terminal-label" x="' + x + '" y="106">' + label + '</text>';
+  }).join('');
+}
+
+function renderLoadBank() {
+  const entries = [];
+  for (let n = 1; n <= state.lampCount; n++) {
+    entries.push({ id: 'lamp-' + n, type: 'lamp', name: 'Lampu ' + (state.lampType === 'led' ? 'LED' : 'Pijar') + ' ' + n });
+  }
+  for (let n = 1; n <= state.dynamoCount; n++) entries.push({ id: 'dynamo-' + n, type: 'dynamo', name: 'Dinamo ' + n });
+  for (let n = 1; n <= state.hornCount; n++) entries.push({ id: 'horn-' + n, type: 'horn', name: 'Klakson ' + n });
+
+  const bank = document.getElementById('load-bank');
+  const total = entries.length;
+  bank.innerHTML = entries.map((load, index) => {
+    const x = total === 1 ? 640 : 140 + index * 1000 / (total - 1);
+    const transform = 'translate(' + x + ' 35)';
+    let artwork = '';
+    let detail = '';
+
+    if (load.type === 'lamp') {
+      const led = state.lampType === 'led';
+      detail = '12 V · ' + (led ? 'berpolaritas' : 'non-polar');
+      artwork = '<path class="lamp-light" d="M-19 72C-19 57-34 55-34 34a34 34 0 0 1 68 0c0 21-15 23-15 38Z" />' +
+        '<path d="M-19 72C-19 57-34 55-34 34a34 34 0 0 1 68 0c0 21-15 23-15 38M-21 72h42v13h-42zM-18 85v10q0 9 10 9H8q10 0 10-9V85M-8 72-13 38q-1-8 5-5l8 7 8-7q6-3 5 5L8 72M-16 104v16h-64v8M16 104v16h64v8" />';
+    } else if (load.type === 'dynamo') {
+      detail = 'Motor DC · kipas';
+      artwork = '<path class="load-lead" d="M-80 128V120H-31V68M31 68V120H80V128"/>' +
+        '<path d="M-22 97v8h14m16 0h14v-8" />' +
+        '<rect class="dynamo-housing" x="-31" y="37" width="62" height="62" rx="15"/>' +
+        '<path class="dynamo-vent" d="M-25 48v16m-7-9h7m43-7v16m7-9h-7"/>' +
+        '<circle class="dynamo-fan-frame" cx="0" cy="68" r="21"/>' +
+        '<g transform="translate(0 68)"><g class="dynamo-fan">' +
+          '<path class="dynamo-fan-blade" d="M-3-4C-14-20-7-29 1-25 8-21 5-11 3-3Z"/>' +
+          '<path class="dynamo-fan-blade" d="M-3-4C-14-20-7-29 1-25 8-21 5-11 3-3Z" transform="rotate(90)"/>' +
+          '<path class="dynamo-fan-blade" d="M-3-4C-14-20-7-29 1-25 8-21 5-11 3-3Z" transform="rotate(180)"/>' +
+          '<path class="dynamo-fan-blade" d="M-3-4C-14-20-7-29 1-25 8-21 5-11 3-3Z" transform="rotate(270)"/>' +
+          '<circle cx="0" cy="0" r="5" fill="#d2e4db" stroke="#527368" stroke-width="1.5"/>' +
+        '</g></g>';
+    } else {
+      detail = 'Klakson · 2 nada';
+      artwork = '<path class="load-lead" d="M-80 128V120H-31V72M31 72V120H80V128"/>' +
+        '<path class="horn-mount" d="M-23 87v15h15m27 0h15V87"/>' +
+        '<rect class="horn-back" x="-30" y="49" width="16" height="39" rx="7"/>' +
+        '<path class="horn-shell" d="M-16 53H-3L29 35V101L-3 83H-16Z"/>' +
+        '<path class="horn-bell" d="M29 35v66"/>' +
+        '<path class="horn-grill" d="M-25 57v26m5-26v26"/>' +
+        '<path class="horn-wave" d="M37 51q13 17 0 34m8-43q21 26 0 52"/>';
+    }
+
+    const polarities = load.type === 'lamp' && state.lampType === 'led' ? ['positive', 'negative'] : ['none', 'none'];
+    const labels = polarities[0] === 'positive' ? ['+', '−'] : ['A', 'B'];
+    const terminals = loadTerminals(load.id, load.name, polarities, labels);
+    return '<g id="' + load.id + '" class="component load-component ' + load.type + '-load" transform="' + transform +
+      '" role="group" aria-label="' + load.name + ', ' + detail + '">' +
+      artwork + terminals +
+      '<text class="component-label" x="0" y="164">' + load.name + '</text>' +
+      '<text class="detail-label" x="0" y="187">' + detail + '</text></g>';
   }).join('');
   refreshTerminals();
 }
@@ -285,17 +360,88 @@ function updateComponentVisuals(message) {
     lamp.dataset.brightnessModel = brightnessModel;
     lamp.setAttribute('aria-label', `Lampu ${state.lampType === 'led' ? 'LED' : 'Pijar'} ${i + 1} 12 V, ${on ? 'menyala' : 'padam'}`);
   });
+  state.dynamos.forEach(({ id, on }, i) => {
+    const dynamo = document.getElementById(id);
+    dynamo.classList.toggle('is-on', on);
+    dynamo.setAttribute('aria-label', 'Dinamo ' + (i + 1) + ', ' + (on ? 'kipas berputar' : 'mati'));
+  });
+  state.horns.forEach(({ id, on }, i) => {
+    const horn = document.getElementById(id);
+    horn.classList.toggle('is-on', on);
+    horn.setAttribute('aria-label', 'Klakson ' + (i + 1) + ', ' + (on ? 'berbunyi' : 'mati'));
+  });
   document.getElementById('lamp-type').value = state.lampType;
   document.getElementById('lamp-count').textContent = `${state.lampCount} lampu`;
-  document.getElementById('add-lamp').disabled = state.lampCount === 4;
   document.getElementById('remove-lamp').disabled = state.lampCount === 1;
+  document.getElementById('dynamo-count').textContent = String(state.dynamoCount);
+  document.getElementById('horn-count').textContent = String(state.hornCount);
+  const full = totalLoadCount() >= 4;
+  document.getElementById('add-lamp').disabled = full;
+  document.getElementById('add-dynamo').disabled = full;
+  document.getElementById('remove-dynamo').disabled = state.dynamoCount === 0;
+  document.getElementById('add-horn').disabled = full;
+  document.getElementById('remove-horn').disabled = state.hornCount === 0;
   document.getElementById('undo-button').disabled = state.connections.length === 0;
   document.getElementById('current-toggle').setAttribute('aria-pressed', String(state.currentVisualizationOn));
   document.getElementById('brightness-note').textContent = state.lamps.some(lamp => lamp.brightnessModel === 'unsupported-mixed-nominal')
     ? 'Rangkaian campuran: terang nominal; daya detail belum dihitung.'
     : state.lampType === 'incandescent' ? 'Pijar identik seri: daya 1/n². Pendekatan resistansi tetap.' : 'LED berpolaritas. Pijar non-polar.';
   renderCurrentVisualization();
+  if (state.horns.some(horn => horn.on)) startHornTone();
+  else stopHornTone();
   setStatus(message);
+}
+
+function totalLoadCount() {
+  return state.lampCount + state.dynamoCount + state.hornCount;
+}
+
+function startHornTone() {
+  const AudioContextType = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContextType) return;
+  try {
+    audioContext = audioContext || new AudioContextType();
+    if (audioContext.state === 'suspended') audioContext.resume().catch(() => {});
+    if (hornNodes) return;
+    const now = audioContext.currentTime;
+    const master = audioContext.createGain();
+    const filter = audioContext.createBiquadFilter();
+    const low = audioContext.createOscillator();
+    const high = audioContext.createOscillator();
+    const highMix = audioContext.createGain();
+    filter.type = 'lowpass';
+    filter.frequency.value = 1100;
+    master.gain.setValueAtTime(0.0001, now);
+    master.gain.linearRampToValueAtTime(0.045, now + 0.08);
+    low.type = 'sawtooth';
+    low.frequency.value = 196;
+    high.type = 'square';
+    high.frequency.value = 247;
+    highMix.gain.value = 0.28;
+    low.connect(filter);
+    high.connect(highMix);
+    highMix.connect(filter);
+    filter.connect(master);
+    master.connect(audioContext.destination);
+    low.start();
+    high.start();
+    hornNodes = { low, high, highMix, filter, master };
+  } catch (error) {
+    hornNodes = null;
+  }
+}
+
+function stopHornTone() {
+  if (!hornNodes || !audioContext) return;
+  const nodes = hornNodes;
+  hornNodes = null;
+  try {
+    const now = audioContext.currentTime;
+    nodes.master.gain.cancelScheduledValues(now);
+    nodes.master.gain.setTargetAtTime(0.0001, now, 0.045);
+    nodes.low.stop(now + 0.18);
+    nodes.high.stop(now + 0.18);
+  } catch (error) {}
 }
 
 function updateSelection() {
@@ -528,24 +674,25 @@ function buildWireRoute(start, end, startPort, endPort, obstacles, existingSegme
   return simplifyRoute([start, ...(route || [startPort, { x: startPort.x, y: endPort.y }, endPort]), end]);
 }
 
-function buildLampWireRoute(start, end, startPort, endPort, fromLamp, toLamp, obstacles, segments, bounds) {
+function buildLoadWireRoute(start, end, startPort, endPort, fromLoad, toLoad, obstacles, segments, bounds) {
   // Fixed short vertical stub, then an outward horizontal escape clear of the
-  // lamp's labels. Main lanes are allocated by endpoints + shared occupancy,
+  // load's labels. Main lanes are allocated by endpoints + shared occupancy,
   // never by cable color or a growing global lamp-lane counter.
-  const escape = (point, stub, isLamp) => {
-    if (!isLamp) return stub;
-    const box = obstacles.find(box => box.element.parentElement.id === 'lamp-bank' &&
+  const escape = (point, stub, isLoad) => {
+    if (!isLoad) return stub;
+    const box = obstacles.find(box => box.element.parentElement.id === 'load-bank' &&
       point.x >= box.left && point.x <= box.right && point.y >= box.top && point.y <= box.bottom);
+    if (!box) return stub;
     const left = point.x < (box.left + box.right) / 2;
     return { x: left ? box.left - 8 : box.right + 8, y: stub.y };
   };
-  const a = escape(start, startPort, fromLamp), b = escape(end, endPort, toLamp);
+  const a = escape(start, startPort, fromLoad), b = escape(end, endPort, toLoad);
   const startAxis = a.x === start.x ? 'v' : 'h', endAxis = b.x === end.x ? 'v' : 'h';
   const startDirection = Math.sign(startAxis === 'v' ? a.y - start.y : a.x - start.x);
   const endDirection = Math.sign(endAxis === 'v' ? b.y - end.y : b.x - end.x);
   const minY = Math.min(a.y, b.y);
   // Congestion must never buy an unnecessary vertical reversal. Only relax
-  // monotonicity if obstacles prevent a monotonic route (e.g. two lamp banks).
+  // monotonicity if obstacles prevent a monotonic route (e.g. dense load banks).
   let route = routeBetweenPorts(a, b, obstacles, segments, bounds,
     startDirection, endDirection, startAxis, endAxis, { minY, monotonicY: true });
   if (!route) route = routeBetweenPorts(a, b, obstacles, segments, bounds,
@@ -569,11 +716,12 @@ function redrawWires() {
   const groups = document.createDocumentFragment();
   state.connections.forEach(connection => {
     const start = terminalCenter(connection.from, rect), end = terminalCenter(connection.to, rect);
-    const fromLamp = /^lamp-\d+-[ab]$/.test(connection.from), toLamp = /^lamp-\d+-[ab]$/.test(connection.to);
-    const startPort = fromLamp ? { x: start.x, y: start.y + 18 } : portFor(connection.from, start);
-    const endPort = toLamp ? { x: end.x, y: end.y + 18 } : portFor(connection.to, end);
-    const points = fromLamp || toLamp
-      ? buildLampWireRoute(start, end, startPort, endPort, fromLamp, toLamp, obstacles, existingSegments, rect)
+    const fromLoad = /^(lamp|dynamo|horn)-\d+-[ab]$/.test(connection.from);
+    const toLoad = /^(lamp|dynamo|horn)-\d+-[ab]$/.test(connection.to);
+    const startPort = fromLoad ? { x: start.x, y: start.y + 18 } : portFor(connection.from, start);
+    const endPort = toLoad ? { x: end.x, y: end.y + 18 } : portFor(connection.to, end);
+    const points = fromLoad || toLoad
+      ? buildLoadWireRoute(start, end, startPort, endPort, fromLoad, toLoad, obstacles, existingSegments, rect)
       : buildWireRoute(start, end, startPort, endPort, obstacles, existingSegments, rect);
     for (let i = 1; i < points.length; i++) existingSegments.push([points[i - 1], points[i]]);
     const data = roundedRoutePath(points);
@@ -613,7 +761,7 @@ function renderSockets() {
 }
 
 // Canonical component geometry uses local SVG coordinates. These hidden paths
-// survive redraws; only dynamic lamp replacements require a new local path.
+// survive redraws; dynamic load replacements require new local paths.
 function internalCurrentGeometry(segment) {
   const definitions = {
     'fuse-1': ['fuse-1-a', 'M0 0H50c0-13 15-13 25 0s25 13 25 0H150'],
@@ -623,16 +771,23 @@ function internalCurrentGeometry(segment) {
     'relay-contact-nc': ['relay-30', 'M-18 82H120L132 38V-18'],
     'relay-coil': ['relay-85', 'M-18 181H85c0-36 24-36 24 0 0-36 24-36 24 0 0-36 24-36 24 0 0-36 23-36 23 0H283'],
   };
-  const lamp = segment.type.startsWith('lamp-');
-  const definition = lamp ? [`${segment.id}-a`,
-    'M-80 128V120H-16V104L-8 72L-13 38q-1-8 5-5l8 7 8-7q6-3 5 5L8 72L16 104V120H80V128'] : definitions[segment.id];
+  let definition = definitions[segment.id];
+  if (segment.type.startsWith('lamp-')) {
+    definition = [segment.id + '-a', 'M-80 128V120H-16V104L-8 72L-13 38q-1-8 5-5l8 7 8-7q6-3 5 5L8 72L16 104V120H80V128'];
+  } else if (segment.type === 'dynamo') {
+    definition = [segment.id + '-a', 'M-80 128V120H-31V68H31V120H80V128'];
+  } else if (segment.type === 'horn') {
+    definition = [segment.id + '-a', 'M-80 128V120H-31V72H31V120H80V128'];
+  }
   if (!definition) return null;
-  const [from, d] = definition, id = `current-geometry-${segment.id}`;
+  const from = definition[0], d = definition[1], id = 'current-geometry-' + segment.id;
   let path = document.getElementById(id);
   if (!path) {
     path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-    path.id = id; path.setAttribute('class', 'internal-current-geometry');
-    path.setAttribute('d', d); path.setAttribute('aria-hidden', 'true');
+    path.id = id;
+    path.setAttribute('class', 'internal-current-geometry');
+    path.setAttribute('d', d);
+    path.setAttribute('aria-hidden', 'true');
     terminalElements.get(from).closest('.component').appendChild(path);
   }
   return { path, from };
@@ -735,7 +890,9 @@ document.getElementById('reset-button').addEventListener('click', () => {
   state.currentVisualizationOn = false;
   state.lampType = 'incandescent';
   state.lampCount = 1;
-  renderLampBank();
+  state.dynamoCount = 0;
+  state.hornCount = 0;
+  renderLoadBank();
   nextWireId = 1;
   wireLayer.replaceChildren();
   updateSelection();
@@ -791,27 +948,39 @@ if (typeof ResizeObserver !== 'undefined') {
 
 document.getElementById('lamp-type').addEventListener('change', event => {
   state.lampType = event.target.value === 'incandescent' ? 'incandescent' : 'led';
-  renderLampBank();
+  renderLoadBank();
   evaluateCircuit();
   updateComponentVisuals(`Jenis beban diubah menjadi ${state.lampType === 'led' ? 'LED' : 'Lampu Pijar'} 12 V.`);
   redrawWires();
 });
-function changeLampCount(delta) {
-  const next = Math.max(1, Math.min(4, state.lampCount + delta));
-  if (next === state.lampCount) return;
-  state.lampCount = next;
-  renderLampBank();
+function changeLoadCount(type, delta) {
+  const property = type === 'lamp' ? 'lampCount' : type === 'dynamo' ? 'dynamoCount' : 'hornCount';
+  const minimum = type === 'lamp' ? 1 : 0;
+  const current = state[property];
+  if (delta > 0 && totalLoadCount() >= 4) return;
+  const next = current + delta;
+  if (next < minimum || next > 4) return;
+  state[property] = next;
+  renderLoadBank();
   state.connections = state.connections.filter(c => terminalElements.has(c.from) && terminalElements.has(c.to));
   evaluateCircuit();
-  updateComponentVisuals(delta < 0 ? 'Lampu terakhir dan kabel yang terhubung telah dihapus.' : 'Lampu ditambahkan.');
+  const names = { lamp: 'Lampu', dynamo: 'Dinamo', horn: 'Klakson' };
+  updateComponentVisuals(delta < 0 ? names[type] + ' terakhir dan kabel yang terhubung dihapus.' : names[type] + ' ditambahkan.');
   redrawWires();
 }
-document.getElementById('add-lamp').addEventListener('click', () => changeLampCount(1));
-document.getElementById('remove-lamp').addEventListener('click', () => changeLampCount(-1));
+document.getElementById('add-lamp').addEventListener('click', () => changeLoadCount('lamp', 1));
+document.getElementById('remove-lamp').addEventListener('click', () => changeLoadCount('lamp', -1));
+document.getElementById('add-dynamo').addEventListener('click', () => changeLoadCount('dynamo', 1));
+document.getElementById('remove-dynamo').addEventListener('click', () => changeLoadCount('dynamo', -1));
+document.getElementById('add-horn').addEventListener('click', () => changeLoadCount('horn', 1));
+document.getElementById('remove-horn').addEventListener('click', () => changeLoadCount('horn', -1));
 
 
-renderLampBank();
+renderLoadBank();
 evaluateCircuit();
 updateComponentVisuals('Pilih kabel merah atau hitam.');
+
+
+
 
 

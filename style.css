@@ -135,6 +135,24 @@ h1 { margin: 0; color: #f0f6f2; font-size: clamp(19px, 1.9vw, 27px); line-height
 #switch[data-state="on"] .switch-symbol-off { opacity: .4; stroke-width: 2; }
 .lamp-light { fill: #28373b; stroke: none; transition: fill .2s, filter .2s; }
 .is-on .lamp-light { fill: #ffdf67; opacity: var(--visual-intensity, 1); filter: drop-shadow(0 0 9px #ffca49); }
+.dynamo-housing { fill: url(#metalShade); stroke: #96aaa0; stroke-width: 2.4; }
+.dynamo-vent { stroke: #7f9690; stroke-width: 3; stroke-linecap: round; }
+.dynamo-fan-frame { fill: #111a1f; stroke: #8ba39a; stroke-width: 2; }
+.dynamo-fan { transform-box: fill-box; transform-origin: center; }
+.dynamo-fan-blade { fill: #4d8575; stroke: #b2ddd0; stroke-width: 1.2; }
+.dynamo-load.is-on .dynamo-fan { animation: fan-spin .55s linear infinite; }
+.dynamo-load.is-on .dynamo-fan-blade { fill: #53dfaa; filter: drop-shadow(0 0 3px #53dfaa88); }
+@keyframes fan-spin { to { transform: rotate(360deg); } }
+.horn-shell { fill: url(#metalShade); stroke: #82968e; stroke-width: 2.2; stroke-linejoin: round; }
+.horn-bell { fill: #26373b; stroke: #adc0b7; stroke-width: 2.3; }
+.horn-grill { fill: none; stroke: #90aaa0; stroke-width: 1.6; stroke-linecap: round; }
+  .horn-back { fill: #33464b; stroke: #92aaa1; stroke-width: 2; }
+  .horn-mount { fill: none; stroke: #82968e; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+.horn-wave { fill: none; stroke: #ffc84f; stroke-width: 3; stroke-linecap: round; opacity: 0; }
+.horn-load.is-on .horn-bell { fill: #384b45; stroke: #ffc84f; filter: drop-shadow(0 0 5px #ffc84f66); }
+.horn-load.is-on .horn-wave { opacity: 1; animation: horn-pulse .36s ease-in-out infinite alternate; }
+@keyframes horn-pulse { to { opacity: .35; } }
+.load-lead { stroke: #9dafaa; stroke-width: 2; }
 .internal-current-geometry { fill: none; stroke: none; visibility: hidden; pointer-events: none; }
 .current-segment { fill: none; stroke: #61e5d0; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; stroke-dasharray: 6 18; pointer-events: none; animation: current-flow .8s linear infinite; }
 .current-control { stroke: #62bdff; }
@@ -180,6 +198,16 @@ h1 { margin: 0; color: #f0f6f2; font-size: clamp(19px, 1.9vw, 27px); line-height
 }
 .lamp-count-controls button:hover:not(:disabled) { background: #285146; }
 .lamp-count-controls button:disabled { color: #80908a; background: #1a2529; }
+.addon-list { display: grid; gap: 7px; margin-top: 13px; padding-top: 11px; border-top: 1px solid #34464b; }
+.addon-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 42px; }
+.addon-row > span:first-child { display: grid; gap: 1px; }
+.addon-row strong { color: #dce8e1; font-size: 11px; }
+.addon-row small { color: #91a3a1; font-size: 9px; }
+.addon-row output { color: var(--mint); font-weight: 750; }
+.addon-actions { display: flex; gap: 5px; }
+.addon-actions button { width: 34px; height: 34px; border: 1px solid #456159; border-radius: 8px; background: #203b35; color: var(--mint); font-size: 18px; cursor: pointer; touch-action: manipulation; }
+.addon-actions button:hover:not(:disabled) { background: #285146; }
+.addon-actions button:disabled { color: #80908a; background: #1a2529; }
 .toolbar-note { margin: 13px 2px 0; color: #91a3a1; font-size: 10px; line-height: 1.6; }
 .header-actions button:not(:disabled), .tool-button:not(:disabled) { cursor: pointer; touch-action: manipulation; }
 button:focus-visible, select:focus-visible { outline: 2px solid var(--mint); outline-offset: 3px; }
@@ -205,6 +233,7 @@ button:focus-visible, select:focus-visible { outline: 2px solid var(--mint); out
 }
 @media (prefers-reduced-motion: reduce) {
   .current-segment { animation: none; stroke-dasharray: none; opacity: .85; }
+  .dynamo-load.is-on .dynamo-fan, .horn-load.is-on .horn-wave { animation: none; }
 }
 @media (min-width: 1600px) {
   .trainer { grid-template-columns: minmax(0, 1fr) 320px; }
